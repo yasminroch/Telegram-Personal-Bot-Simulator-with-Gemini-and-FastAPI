@@ -8,7 +8,7 @@ import os
 router = APIRouter()
 chat_service = ChatService()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 print("TOKEN EXISTE:", TELEGRAM_TOKEN is not None)
 
