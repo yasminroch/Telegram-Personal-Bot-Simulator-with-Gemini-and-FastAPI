@@ -3,39 +3,51 @@ import re
 from app.infrastructure.ai.gemini_client import GeminiClient
 from app.domain.persona import PERSONA_PROMPT
 
-# Sinais de que a resposta vazou raciocínio, formato interno, ou fugiu do personagem.
-# Qualquer match aqui = descarta a resposta inteira, não envia nada.
+
+# Detecta vazamentos claros de raciocínio interno ou formatos indevidos.
+# Deve bloquear apenas padrões muito específicos.
 _LEAK_PATTERNS = [
-    r"\bTHOUGHT\b",
-    r"\bfinal check\b",
-    r"\bidentidade\b",
-    r"\bregras absolutas\b",
-    r"\bpersona\b",
-    r"\bcomo uma ia\b",
-    r"\bcomo um modelo\b",
-    r"\bnão posso\b.{0,30}\bIA\b",
-    r"\bassistente\b",
-    r"^\s*\{",       # JSON solto
-    r"^\s*```",      # bloco de código solto
+    r"^\s*THOUGHT\s*:",
+    r"^\s*FINAL CHECK\s*:",
+    r"^\s*ANALYSIS\s*:",
+    r"^\s*REASONING\s*:",
+    r"^\s*\{.*\}\s*$",          # JSON puro
+    r"^\s*```",                 # bloco de código
+    r"^yasmin\s*:",             # modelo colocando nome como prefixo
 ]
 
-_LEAK_RE = re.compile("|".join(_LEAK_PATTERNS), flags=re.IGNORECASE)
+_LEAK_RE = re.compile(
+    "|".join(_LEAK_PATTERNS),
+    flags=re.IGNORECASE | re.DOTALL
+)
 
 
 def _sanitizar(texto: str):
     """
-    Recebe o texto bruto do modelo e retorna a lista de fragmentos válidos,
-    ou None se a resposta deve ser descartada (não enviar nada).
+    Valida a resposta do modelo antes de enviar ao Telegram.
+    Retorna lista de mensagens ou None quando deve ser descartada.
     """
+
     if not texto or not texto.strip():
+        print("Gemini retornou vazio")
         return None
 
+    texto = texto.strip()
+
+    # Bloqueia apenas vazamentos claros
     if _LEAK_RE.search(texto):
+        print("Resposta bloqueada pelo guardrail:")
+        print(texto)
         return None
 
-    fragmentos = [f.strip() for f in texto.split("|||") if f.strip()]
+    fragmentos = [
+        f.strip()
+        for f in texto.split("|||")
+        if f.strip()
+    ]
 
     if not fragmentos:
+        print("Nenhum fragmento válido encontrado")
         return None
 
     return fragmentos
@@ -47,28 +59,40 @@ class ChatService:
         self.history = []
 
     def gerar_resposta(self, mensagem: str):
+
         contents = []
 
         for m, r in self.history[-6:]:
-            contents.append({"role": "user", "parts": [{"text": m}]})
-            contents.append({"role": "model", "parts": [{"text": " ".join(r)}]})
+            contents.append({
+                "role": "user",
+                "parts": [{"text": m}]
+            })
 
-        contents.append({"role": "user", "parts": [{"text": mensagem}]})
+            contents.append({
+                "role": "model",
+                "parts": [{"text": " ".join(r)}]
+            })
+
+        contents.append({
+            "role": "user",
+            "parts": [{"text": mensagem}]
+        })
 
         try:
             texto_bruto = self.client.generate(contents)
-        except Exception:
-            # Falha de API/timeout/etc -> não manda nada, sem mensagem de erro visível
+
+            print("Resposta bruta Gemini:")
+            print(repr(texto_bruto))
+
+        except Exception as e:
+            print("Erro Gemini:", e)
             return []
 
         fragmentos = _sanitizar(texto_bruto)
 
         if fragmentos is None:
-            # Resposta vazia, vazou raciocínio, ou veio em formato inválido
-            # -> não manda nada, e não contamina o histórico com lixo
             return []
 
-        # só entra no histórico o que realmente foi validado e (presumivelmente) enviado
         self.history.append((mensagem, fragmentos))
 
         return fragmentos
