@@ -17,7 +17,7 @@ class GeminiClient:
     def generate(self, contents):
 
         response = self.client.models.generate_content(
-            model="gemini-2.5-flash-lite",
+            model="gemini-3.1-flash-lite",
             contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=self.system_prompt,
